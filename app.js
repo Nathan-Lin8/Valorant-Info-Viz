@@ -138,6 +138,10 @@ const eventShapes = {
   death:         d3.symbolCross
 };
 
+const ROUND_DURATION_SEC = 100;
+const PLAYBACK_STEP_SEC = 0.25;
+const PLAYBACK_INTERVAL_MS = 40;
+
 let selectedRound = 1;
 let currentTime   = 0;
 let isPlaying     = false;
@@ -216,6 +220,133 @@ function getPlayerColorMap(roundId) {
   return map;
 }
 
+function getRoundEvents(roundId) {
+  return roundEvents
+    .filter(d => d.round_id === roundId)
+    .sort((a, b) => a.timestamp_sec - b.timestamp_sec);
+}
+
+function getPathPointsBetweenZones(fromZone, toZone) {
+  const fromId = zoneToNode[fromZone];
+  const toId   = zoneToNode[toZone];
+  if (!fromId || !toId) return null;
+  if (fromId === toId) {
+    const node = nodeMap[fromId];
+    return node ? [{ x: node.x, y: node.y }] : null;
+  }
+
+  const pathIds = findPath(fromId, toId);
+  if (!pathIds) return null;
+
+  return pathIds
+    .map(id => nodeMap[id] ? { x: nodeMap[id].x, y: nodeMap[id].y } : null)
+    .filter(Boolean);
+}
+
+function buildPolylineMetrics(points) {
+  if (!points || points.length < 2) return null;
+
+  const segmentLengths = [];
+  let totalLength = 0;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const dx = points[i + 1].x - points[i].x;
+    const dy = points[i + 1].y - points[i].y;
+    const segmentLen = Math.sqrt(dx * dx + dy * dy);
+    segmentLengths.push(segmentLen);
+    totalLength += segmentLen;
+  }
+
+  if (totalLength <= 0) return null;
+
+  return { points, segmentLengths, totalLength };
+}
+
+function getPointAtDistance(polyline, distance) {
+  if (!polyline) return null;
+
+  const clamped = Math.max(0, Math.min(distance, polyline.totalLength));
+  let traversed = 0;
+
+  for (let i = 0; i < polyline.segmentLengths.length; i++) {
+    const segLen = polyline.segmentLengths[i];
+    if (clamped <= traversed + segLen) {
+      const t = segLen === 0 ? 0 : (clamped - traversed) / segLen;
+      const a = polyline.points[i];
+      const b = polyline.points[i + 1];
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    }
+    traversed += segLen;
+  }
+
+  return polyline.points[polyline.points.length - 1];
+}
+
+function getPartialPathPoints(polyline, fraction) {
+  if (!polyline) return [];
+  const f = Math.max(0, Math.min(1, fraction));
+  if (f <= 0) return [polyline.points[0]];
+  if (f >= 1) return polyline.points.slice();
+
+  const targetDistance = polyline.totalLength * f;
+  const points = [polyline.points[0]];
+  let traversed = 0;
+
+  for (let i = 0; i < polyline.segmentLengths.length; i++) {
+    const segLen = polyline.segmentLengths[i];
+    const a = polyline.points[i];
+    const b = polyline.points[i + 1];
+
+    if (traversed + segLen < targetDistance) {
+      points.push(b);
+      traversed += segLen;
+      continue;
+    }
+
+    const remaining = targetDistance - traversed;
+    const t = segLen === 0 ? 0 : remaining / segLen;
+    points.push({
+      x: a.x + (b.x - a.x) * t,
+      y: a.y + (b.y - a.y) * t
+    });
+    break;
+  }
+
+  return points;
+}
+
+function buildPlayerMovementSegments(roundId) {
+  const roundEvts = getRoundEvents(roundId);
+  const byPlayer  = d3.group(roundEvts, d => d.player_id);
+  const colorByPlayer = getPlayerColorMap(roundId);
+  const segments = [];
+
+  byPlayer.forEach((events, playerId) => {
+    const sorted = events.slice().sort((a, b) => a.timestamp_sec - b.timestamp_sec);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const fromEvent = sorted[i];
+      const toEvent = sorted[i + 1];
+      if (toEvent.timestamp_sec <= fromEvent.timestamp_sec) continue;
+
+      const pathPoints = getPathPointsBetweenZones(fromEvent.zone, toEvent.zone);
+      const pathMetrics = buildPolylineMetrics(pathPoints);
+      if (!pathMetrics) continue;
+
+      segments.push({
+        playerId,
+        color: colorByPlayer[playerId] || "#888",
+        fromEvent,
+        toEvent,
+        startTime: fromEvent.timestamp_sec,
+        endTime: toEvent.timestamp_sec,
+        path: pathMetrics
+      });
+    }
+  });
+
+  return { roundEvents: roundEvts, segments, colorByPlayer };
+}
+
 // ── UI ────────────────────────────────────────────────────────
 
 function populateRoundSelect() {
@@ -279,7 +410,10 @@ function renderTimeline() {
     .attr("transform", d => `translate(${x(d.timestamp_sec)},${y(d.round_id) + y.bandwidth() / 2})`)
     .attr("d", d3.symbol().type(d => eventShapes[d.event_type] || d3.symbolCircle).size(85))
     .attr("fill", d => eventColors[d.outcome])
-    .attr("opacity", d => d.round_id === selectedRound ? 1 : 0.55)
+    .attr("opacity", d => {
+      const roundWeight = d.round_id === selectedRound ? 1 : 0.65;
+      return d.timestamp_sec <= currentTime ? roundWeight : roundWeight * 0.25;
+    })
     .on("click", (_, d) => {
       selectedRound = d.round_id;
       roundSelect.value = String(selectedRound);
@@ -347,11 +481,10 @@ function renderMap() {
   // Preserve the background <image> (first child), remove everything else
   while (svgEl.children.length > 1) svgEl.removeChild(svgEl.lastChild);
 
-  const pos = id => nodeMap[id] ? { x: nodeMap[id].x, y: nodeMap[id].y } : null;
-
   const gEdges  = mapSvg.append("g");
   const gPaths  = mapSvg.append("g");
   const gEvents = mapSvg.append("g");
+  const gPlayerMarkers = mapSvg.append("g");
 
   // Faint graph edges for visual reference
   gEdges.selectAll("line").data(graphEdges).enter().append("line")
@@ -359,47 +492,37 @@ function renderMap() {
     .attr("x1", d => nodeMap[d[0]].x).attr("y1", d => nodeMap[d[0]].y)
     .attr("x2", d => nodeMap[d[1]].x).attr("y2", d => nodeMap[d[1]].y);
 
-  const roundEvts = roundEvents
-    .filter(d => d.round_id === selectedRound)
-    .sort((a, b) => a.timestamp_sec - b.timestamp_sec);
+  const movement = buildPlayerMovementSegments(selectedRound);
+  const visibleEvents = movement.roundEvents.filter(d => d.timestamp_sec <= currentTime);
+  const lineBuilder = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveLinear);
 
-  const visible        = roundEvts.filter(d => d.timestamp_sec <= currentTime);
-  const playerColorMap = getPlayerColorMap(selectedRound);
+  // Draw complete path segments and in-progress segment portion.
+  movement.segments.forEach(segment => {
+    if (currentTime <= segment.startTime) return;
 
-  // Per-player paths between consecutive events of the same player
-  d3.group(visible, d => d.player_id).forEach((events, pid) => {
-    const color  = playerColorMap[pid] || "#888";
-    const sorted = events.slice().sort((a, b) => a.timestamp_sec - b.timestamp_sec);
+    const segmentDuration = segment.endTime - segment.startTime;
+    const elapsed = Math.min(currentTime, segment.endTime) - segment.startTime;
+    const fraction = segmentDuration <= 0 ? 1 : elapsed / segmentDuration;
+    const pathPoints = getPartialPathPoints(segment.path, fraction);
+    if (pathPoints.length < 2) return;
 
-    for (let i = 0; i < sorted.length - 1; i++) {
-      const fromId = zoneToNode[sorted[i].zone];
-      const toId   = zoneToNode[sorted[i + 1].zone];
-      if (!fromId || !toId || fromId === toId) continue;
-
-      const pathIds = findPath(fromId, toId);
-      if (!pathIds) continue;
-
-      const pts = pathIds.map(id => pos(id)).filter(Boolean);
-      if (pts.length < 2) continue;
-
-      gPaths.append("path")
-        .attr("d", d3.line().x(d => d.x).y(d => d.y)(pts))
-        .attr("fill", "none")
-        .attr("stroke", color)
-        .attr("stroke-width", 3)
-        .attr("stroke-linecap", "round")
-        .attr("stroke-linejoin", "round")
-        .attr("opacity", 0.75);
-    }
+    gPaths.append("path")
+      .attr("d", lineBuilder(pathPoints))
+      .attr("fill", "none")
+      .attr("stroke", segment.color)
+      .attr("stroke-width", 3.5)
+      .attr("stroke-linecap", "round")
+      .attr("stroke-linejoin", "round")
+      .attr("opacity", 0.85);
   });
 
   // Event dots snapped to node positions
-  visible.forEach(d => {
+  visibleEvents.forEach(d => {
     const nodeId = zoneToNode[d.zone];
-    if (!nodeId) return;
-    const p = pos(nodeId);
+    if (!nodeId || !nodeMap[nodeId]) return;
+    const p = nodeMap[nodeId];
     if (!p) return;
-    const color = playerColorMap[d.player_id] || eventColors[d.outcome];
+    const color = movement.colorByPlayer[d.player_id] || eventColors[d.outcome];
 
     gEvents.append("circle")
       .attr("cx", p.x).attr("cy", p.y).attr("r", 8)
@@ -412,14 +535,57 @@ function renderMap() {
       .attr("font-size", "11px").attr("fill", "#111").attr("font-weight", "700")
       .text(d.event_type.replace(/_/g, " "));
   });
+
+  const players = Array.from(new Set(movement.roundEvents.map(d => d.player_id))).sort();
+  players.forEach(playerId => {
+    const playerEvents = movement.roundEvents.filter(d => d.player_id === playerId);
+    if (!playerEvents.length) return;
+
+    const color = movement.colorByPlayer[playerId] || "#888";
+    let markerPoint = null;
+
+    const activeSegment = movement.segments.find(
+      segment =>
+        segment.playerId === playerId &&
+        currentTime >= segment.startTime &&
+        currentTime <= segment.endTime
+    );
+
+    if (activeSegment) {
+      const duration = activeSegment.endTime - activeSegment.startTime;
+      const progress = duration <= 0 ? 1 : (currentTime - activeSegment.startTime) / duration;
+      markerPoint = getPointAtDistance(activeSegment.path, activeSegment.path.totalLength * progress);
+    } else if (currentTime < playerEvents[0].timestamp_sec) {
+      const firstNode = zoneToNode[playerEvents[0].zone];
+      markerPoint = firstNode ? nodeMap[firstNode] : null;
+    } else {
+      const pastEvents = playerEvents.filter(d => d.timestamp_sec <= currentTime);
+      const lastEvent = pastEvents[pastEvents.length - 1];
+      if (lastEvent) {
+        const nodeId = zoneToNode[lastEvent.zone];
+        markerPoint = nodeId ? nodeMap[nodeId] : null;
+      }
+    }
+
+    if (!markerPoint) return;
+
+    gPlayerMarkers.append("circle")
+      .attr("cx", markerPoint.x)
+      .attr("cy", markerPoint.y)
+      .attr("r", 5.5)
+      .attr("fill", color)
+      .attr("stroke", "#ffffff")
+      .attr("stroke-width", 1.5)
+      .attr("opacity", 0.95);
+  });
 }
 
 // ── Playback ──────────────────────────────────────────────────
 
 function setCurrentTime(value) {
-  currentTime = +value;
+  currentTime = Math.max(0, Math.min(ROUND_DURATION_SEC, +value));
   timeScrubber.value = currentTime;
-  currentTimeLabel.textContent = `${currentTime}s`;
+  currentTimeLabel.textContent = `${currentTime.toFixed(1).replace(/\.0$/, "")}s`;
   renderTimeline();
   renderMap();
 }
@@ -428,9 +594,9 @@ function startPlayback() {
   if (isPlaying) return;
   isPlaying = true;
   playTimer = setInterval(() => {
-    if (currentTime >= 100) { stopPlayback(); return; }
-    setCurrentTime(currentTime + 1);
-  }, 120);
+    if (currentTime >= ROUND_DURATION_SEC) { stopPlayback(); return; }
+    setCurrentTime(currentTime + PLAYBACK_STEP_SEC);
+  }, PLAYBACK_INTERVAL_MS);
 }
 
 function stopPlayback() {
@@ -476,6 +642,8 @@ nextRoundBtn.addEventListener("click", () => {
 // ── Init ──────────────────────────────────────────────────────
 
 populateRoundSelect();
+timeScrubber.max = String(ROUND_DURATION_SEC);
+timeScrubber.step = "0.25";
 updateRoundMeta();
 updateStats();
 renderHistogram();
