@@ -3,26 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Valorant Ascent Round Analysis</title>
+  <title>Round Analysis</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
   <div class="app-shell">
-    <header class="top-bar">
-      <div class="title-wrap">
-        <h1>Valorant Ascent Round Analysis</h1>
-        <p class="subtitle">Spatial and temporal comparison of round-level decision sequences</p>
-      </div>
+    <div class="top-bar">
       <div class="global-controls">
-        <label>
-          Side
-          <select id="sideFilter">
-            <option value="all">All</option>
-            <option value="attack">Attack</option>
-            <option value="defense">Defense</option>
-          </select>
-        </label>
         <label>
           Outcome
           <select id="outcomeFilter">
@@ -31,131 +19,155 @@
             <option value="loss">Losses</option>
           </select>
         </label>
+
+        <label>
+          Metric
+          <select id="metricSelect">
+            <option value="first_contact">First Contact</option>
+            <option value="first_kill">First Kill</option>
+            <option value="trade">Trade</option>
+            <option value="kill">Kill</option>
+            <option value="plant">Plant</option>
+            <option value="round_end">Round End</option>
+          </select>
+        </label>
       </div>
-    </header>
+    </div>
 
     <main class="dashboard-grid">
+      <section class="left-column">
+        <section class="map-only-panel">
+          <div class="map-stage map-stage-clean">
+            <div class="map-zoom-controls">
+              <button id="zoomOutBtn" type="button">−</button>
+              <button id="zoomInBtn" type="button">+</button>
+              <button id="zoomResetBtn" type="button">Reset</button>
+            </div>
 
-      <!-- MAP: single SVG containing both the map image and overlay layers -->
-      <!-- viewBox matches Figma canvas exactly (848×880) so node coords are 1:1 -->
-      <section class="panel map-panel">
-        <div class="panel-header">
-          <h2>Map View</h2>
-          <p>Event dots and per-player paths snapped to graph nodes</p>
-        </div>
-        <div class="map-stage">
-          <svg id="mapSvg"
-               viewBox="0 0 848 880"
-               preserveAspectRatio="xMidYMid meet"
-               xmlns="http://www.w3.org/2000/svg">
-            <image href="assets/ASCENT.svg" x="0" y="0" width="848" height="880" />
-            <!-- D3 appends overlay layers here at runtime -->
-          </svg>
-        </div>
+            <svg
+              id="mapSvg"
+              viewBox="0 0 848 880"
+              preserveAspectRatio="xMidYMid meet"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <image href="assets/ASCENT.svg" x="0" y="0" width="848" height="880"></image>
+            </svg>
+          </div>
+        </section>
       </section>
 
-      <!-- SUMMARY + HISTOGRAM -->
-      <section class="panel summary-panel">
-        <div class="panel-header">
-          <h2>Summary + Histograms</h2>
-          <p>General stats and event timing distributions</p>
-        </div>
-        <div class="summary-content">
-          <div class="stat-cards">
-            <div class="stat-card">
-              <span class="stat-label">Rounds</span>
-              <span class="stat-value" id="roundCount">0</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Avg First Contact</span>
-              <span class="stat-value" id="avgFirstContact">0s</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Avg First Kill</span>
-              <span class="stat-value" id="avgFirstKill">0s</span>
-            </div>
-          </div>
-          <div class="summary-controls">
-            <label>
-              Metric
-              <select id="metricSelect">
-                <option value="first_contact">First Contact</option>
-                <option value="first_kill">First Kill</option>
-                <option value="plant">Plant</option>
-                <option value="round_end">Round End</option>
-                <option value="death">Death</option>
-              </select>
-            </label>
-          </div>
-          <div class="chart-wrap">
-            <svg id="histogramSvg"></svg>
-          </div>
-        </div>
-      </section>
+      <section class="right-column">
+        <section class="panel summary-panel">
+          <details id="summaryAccordion">
+            <summary>Summary + Histogram</summary>
+            <div class="summary-content">
+              <div class="stat-cards">
+                <div class="stat-card">
+                  <span class="stat-label">Rounds</span>
+                  <span class="stat-value" id="roundCount">0</span>
+                </div>
 
-      <!-- CONTROLS -->
-      <section class="panel control-panel">
-        <div class="panel-header">
-          <h2>Current Round + Controls</h2>
-          <p>Scrubbing, playback, and round selection</p>
-        </div>
-        <div class="control-content">
-          <div class="current-round-box">
-            <h3 id="selectedRoundTitle">Round 1</h3>
-            <p id="selectedRoundMeta">Attack • Win</p>
-          </div>
-          <div class="round-select-row">
-            <button id="prevRoundBtn" type="button">Prev</button>
-            <button id="nextRoundBtn" type="button">Next</button>
-            <label class="round-select-label">
-              Select Round
-              <select id="roundSelect"></select>
-            </label>
-          </div>
-          <div class="scrubber-wrap">
-            <label for="timeScrubber">Time Scrubber</label>
-            <input id="timeScrubber" type="range" min="0" max="100" step="1" value="0" />
-            <div class="scrubber-labels">
-              <span>0s</span>
-              <span id="currentTimeLabel">0s</span>
-              <span>100s</span>
-            </div>
-          </div>
-          <div class="playback-row">
-            <button id="playBtn" type="button">Play</button>
-            <button id="pauseBtn" type="button">Pause</button>
-          </div>
-          <div class="legend">
-            <div class="legend-section">
-              <span class="legend-heading">Outcome</span>
-              <div class="legend-item"><span class="legend-dot" style="background:#1f6f50"></span><span>Win</span></div>
-              <div class="legend-item"><span class="legend-dot" style="background:#a33b3b"></span><span>Loss</span></div>
-            </div>
-            <div class="legend-section">
-              <span class="legend-heading">Players (map dots)</span>
-              <div class="legend-item"><span class="legend-dot" style="background:#e67e22"></span><span>Player 1</span></div>
-              <div class="legend-item"><span class="legend-dot" style="background:#2980b9"></span><span>Player 2</span></div>
-              <div class="legend-item"><span class="legend-dot" style="background:#8e44ad"></span><span>Player 3</span></div>
-              <div class="legend-item"><span class="legend-dot" style="background:#27ae60"></span><span>Player 4</span></div>
-              <div class="legend-item"><span class="legend-dot" style="background:#c0392b"></span><span>Player 5</span></div>
-            </div>
-          </div>
-        </div>
-      </section>
+                <div class="stat-card">
+                  <span class="stat-label">Avg First Contact</span>
+                  <span class="stat-value" id="avgFirstContact">0s</span>
+                </div>
 
-      <!-- TIMELINE -->
-      <section class="panel timeline-panel">
-        <div class="panel-header">
-          <h2>Stacked Timeline</h2>
-          <p>Aligned round timelines · click any marker to select that round</p>
-        </div>
-        <div class="timeline-wrap">
-          <svg id="timelineSvg"></svg>
-        </div>
-      </section>
+                <div class="stat-card">
+                  <span class="stat-label">Avg First Kill</span>
+                  <span class="stat-value" id="avgFirstKill">0s</span>
+                </div>
+              </div>
 
+              <div class="chart-wrap compact-chart">
+                <svg id="histogramSvg"></svg>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <section class="panel timeline-panel">
+          <div class="panel-header compact-header">
+            <h2>Stacked Timeline</h2>
+          </div>
+
+          <div class="timeline-wrap">
+            <svg id="timelineSvg"></svg>
+          </div>
+        </section>
+
+        <section class="panel control-panel">
+          <div class="panel-header compact-header">
+            <h2>Scrub + Controls</h2>
+          </div>
+
+          <div class="control-content">
+            <div class="current-round-box">
+              <h3 id="selectedRoundTitle">Round 1</h3>
+              <p id="selectedRoundMeta">NRG Win</p>
+            </div>
+
+            <div class="round-select-row">
+              <button id="prevRoundBtn" type="button">Prev</button>
+              <button id="nextRoundBtn" type="button">Next</button>
+
+              <label class="round-select-label">
+                Select Round
+                <select id="roundSelect"></select>
+              </label>
+            </div>
+
+            <div class="scrubber-wrap">
+              <label for="timeScrubber">Time Scrubber</label>
+              <input id="timeScrubber" type="range" min="0" max="100" step="0.25" value="0" />
+              <div class="scrubber-icon-wrap">
+                <svg id="scrubberEventsSvg"></svg>
+              </div>
+              <div class="scrubber-labels">
+                <span>0s</span>
+                <span id="currentTimeLabel">0s</span>
+                <span>100s</span>
+              </div>
+            </div>
+
+            <div class="playback-row">
+              <button id="playBtn" type="button">Play</button>
+              <button id="pauseBtn" type="button">Pause</button>
+            </div>
+
+            <div class="legend-inline">
+              <div class="legend">
+                <div class="legend-section">
+                  <span class="legend-heading">Round Color</span>
+                  <div class="legend-item"><span class="legend-dot win"></span><span>NRG Win</span></div>
+                  <div class="legend-item"><span class="legend-dot loss"></span><span>NRG Loss</span></div>
+                </div>
+
+                <div class="legend-section">
+                  <span class="legend-heading">Map Marks</span>
+                  <div class="legend-item"><span class="legend-source-demo"></span><span>Source</span></div>
+                  <div class="legend-item"><span class="legend-target-demo">✕</span><span>Target</span></div>
+                  <div class="legend-item"><span class="legend-player-demo"></span><span>Player Position</span></div>
+                </div>
+
+                <div class="legend-section">
+                  <span class="legend-heading">Timeline Shapes</span>
+                  <div class="legend-item"><span class="shape-demo circle"></span><span>First Contact</span></div>
+                  <div class="legend-item"><span class="shape-demo triangle"></span><span>First Kill</span></div>
+                  <div class="legend-item"><span class="shape-demo square"></span><span>Trade</span></div>
+                  <div class="legend-item"><span class="shape-demo diamond"></span><span>Kill</span></div>
+                  <div class="legend-item"><span class="shape-demo star">★</span><span>Plant</span></div>
+                  <div class="legend-item"><span class="shape-demo cross">✕</span><span>Round End</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
     </main>
   </div>
+
+  <div id="tooltip" class="tooltip"></div>
+
   <script src="app.js"></script>
 </body>
 </html>
