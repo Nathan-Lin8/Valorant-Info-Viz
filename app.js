@@ -1,3 +1,4 @@
+// ─── State ────────────────────────────────────────────────────────────────────
 let graphNodes = [];
 let graphEdges = [];
 let roundEvents = [];
@@ -250,13 +251,19 @@ function updateStats() {
 // ─── Histogram ─────────────────────────────────────────────────────────────────
 function renderHistogram() {
   const svgNode = histogramSvg.node();
-  const width = svgNode.clientWidth || 340;
-  const height = svgNode.clientHeight || 180;
+  const style = window.getComputedStyle(svgNode);
+  const padL = parseFloat(style.paddingLeft) || 0;
+  const padR = parseFloat(style.paddingRight) || 0;
+  const padT = parseFloat(style.paddingTop) || 0;
+  const padB = parseFloat(style.paddingBottom) || 0;
+  const width = (svgNode.clientWidth || 340) - padL - padR;
+  const height = (svgNode.clientHeight || 180) - padT - padB;
   histogramSvg.selectAll("*").remove();
 
   const metric = metricSelect.value;
+  const metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
   const filtered = getFilteredEvents().filter(d => d.event_type === metric);
-  const margin = { top: 14, right: 14, bottom: 28, left: 32 };
+  const margin = { top: 14, right: 14, bottom: 38, left: 32 };
   const iw = width - margin.left - margin.right;
   const ih = height - margin.top - margin.bottom;
 
@@ -291,11 +298,37 @@ function renderHistogram() {
     .attr("height", d => ih - y(d.length))
     .attr("fill", eventColors.loss).attr("opacity", 0.5).attr("rx", 2);
 
-  // Force x-axis to always show 0 … 100 s
+  // Axes
   g.append("g").attr("transform", `translate(0,${ih})`)
     .call(d3.axisBottom(x).tickValues([0, 20, 40, 60, 80, 100]).tickFormat(d => `${d}s`));
 
   g.append("g").call(d3.axisLeft(y).ticks(4));
+
+  // X-axis label showing selected metric
+  g.append("text")
+    .attr("x", iw / 2).attr("y", ih + margin.bottom - 4)
+    .attr("text-anchor", "middle")
+    .attr("fill", "#8b949e").attr("font-size", "10px")
+    .text(metricLabel);
+
+  // Invisible overlay rects for tooltips, one per bin
+  winBins.forEach((wb, i) => {
+    const lb = lossBins[i];
+    g.append("rect")
+      .attr("x", x(wb.x0)).attr("y", 0)
+      .attr("width", Math.max(0, x(wb.x1) - x(wb.x0))).attr("height", ih)
+      .attr("fill", "transparent")
+      .style("cursor", "default")
+      .on("mouseover", (event) => {
+        showTooltip(event,
+          `<strong>${wb.x0}s – ${wb.x1}s</strong><br>` +
+          `<span style="color:var(--win)">Win: ${wb.length}</span><br>` +
+          `<span style="color:var(--loss)">Loss: ${lb.length}</span>`
+        );
+      })
+      .on("mousemove", moveTooltip)
+      .on("mouseout", hideTooltip);
+  });
 }
 
 // ─── Timeline ──────────────────────────────────────────────────────────────────
@@ -783,9 +816,14 @@ function renderEventDensity() {
   const svg = d3.select(el);
   svg.selectAll("*").remove();
 
-  const width  = el.clientWidth  || 340;
-  const height = el.clientHeight || 180;
-  const margin = { top: 12, right: 14, bottom: 28, left: 32 };
+  const elStyle = window.getComputedStyle(el);
+  const dPadL = parseFloat(elStyle.paddingLeft) || 0;
+  const dPadR = parseFloat(elStyle.paddingRight) || 0;
+  const dPadT = parseFloat(elStyle.paddingTop) || 0;
+  const dPadB = parseFloat(elStyle.paddingBottom) || 0;
+  const width  = (el.clientWidth  || 340) - dPadL - dPadR;
+  const height = (el.clientHeight || 180) - dPadT - dPadB;
+  const margin = { top: 12, right: 14, bottom: 38, left: 32 };
   const iw = width  - margin.left - margin.right;
   const ih = height - margin.top  - margin.bottom;
   const g  = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
@@ -840,6 +878,12 @@ function renderEventDensity() {
   g.append("g").attr("transform", `translate(0,${ih})`)
     .call(d3.axisBottom(x).tickValues([0, 20, 40, 60, 80, 100]).tickFormat(d => `${d}s`));
   g.append("g").call(d3.axisLeft(y).ticks(4));
+
+  g.append("text")
+    .attr("x", iw / 2).attr("y", ih + margin.bottom - 4)
+    .attr("text-anchor", "middle")
+    .attr("fill", "#8b949e").attr("font-size", "10px")
+    .text("Time (s)");
 
   // Brush for time-range selection
   const brush = d3.brushX()
@@ -1321,6 +1365,7 @@ window.addEventListener("resize", () => {
   }, 150);
 });
 
+// ─── Boot ──────────────────────────────────────────────────────────────────────
 loadData().catch(err => {
   console.error(err);
   alert("Failed to load CSV files. Open this app via a local server (e.g. python -m http.server 8080).");

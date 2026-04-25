@@ -352,10 +352,10 @@ button:hover { background: var(--border); }
 }
 
 /* ─── SVG chart heights ──────────────────────────── */
-#histogramSvg    { display: block; width: 100%; height: 180px; background: var(--surface); }
+#histogramSvg    { display: block; width: 100%; height: 200px; background: var(--surface); }
 #timelineSvg     { display: block; width: 100%; }
 #sankeyChartSvg  { display: block; width: 100%; height: 220px; background: var(--surface); }
-#densityChartSvg { display: block; width: 100%; height: 180px; background: var(--surface); }
+#densityChartSvg { display: block; width: 100%; height: 200px; background: var(--surface); }
 #zoneActivitySvg { display: block; width: 100%; height: 240px; background: var(--surface); }
 
 /* Give breathing room to chart SVGs that sit directly in a card (not inside a wrapper) */
